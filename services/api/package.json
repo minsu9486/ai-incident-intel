@@ -1,0 +1,25 @@
+{
+  "name": "ai-incident-api",
+  "version": "1.0.0",
+  "description": "AI Incident Intelligence Platform API",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "graphql",
+    "apollo",
+    "express",
+    "incident-management"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@apollo/server": "^5.0.0",
+    "@as-integrations/express4": "^1.1.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "graphql": "^16.11.0"
+  }
+}
