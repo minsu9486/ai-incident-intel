@@ -5,19 +5,23 @@
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "consumer": "node consumer.js"
   },
   "keywords": [
     "graphql",
     "apollo",
     "express",
-    "incident-management"
+    "incident-management",
+    "kafka",
+    "cassandra"
   ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@apollo/server": "^5.0.0",
     "@as-integrations/express4": "^1.1.2",
+    "cassandra-driver": "^4.8.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "graphql": "^16.11.0",

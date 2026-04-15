@@ -3,29 +3,13 @@ const cors = require("cors");
 const { ApolloServer } = require("@apollo/server");
 const { expressMiddleware } = require("@as-integrations/express4");
 const { publishIncidentReported } = require("./kafka");
+const { connectCassandra, getIncidentTimeline } = require("./cassandra");
 
 const PORT = 4000;
 
-const incidentEvents = [
-  {
-    id: "evt-1",
-    incidentId: "inc-123",
-    type: "INCIDENT_REPORTED",
-    message: "CPU usage spike detected on payments-api",
-    timestamp: new Date().toISOString()
-  },
-  {
-    id: "evt-2",
-    incidentId: "inc-123",
-    type: "SEVERITY_SCORED",
-    message: "Severity scored as HIGH",
-    timestamp: new Date().toISOString()
-  }
-];
-
 function buildIncidentReportedEvent(incidentId, message) {
   return {
-    id: `evt-${incidentEvents.length + 1}`,
+    id: `evt-${Date.now()}`,
     incidentId,
     type: "INCIDENT_REPORTED",
     message,
@@ -65,8 +49,8 @@ const typeDefs = `#graphql
 const resolvers = {
   Query: {
     health: () => "ok",
-    incidentTimeline: (_, { incidentId }) => {
-      return incidentEvents.filter((event) => event.incidentId === incidentId);
+    incidentTimeline: async (_, { incidentId }) => {
+      return await getIncidentTimeline(incidentId);
     }
   },
   Mutation: {
@@ -74,7 +58,6 @@ const resolvers = {
       const newEvent = buildIncidentReportedEvent(input.incidentId, input.message);
 
       await publishIncidentReported(newEvent);
-      incidentEvents.push(newEvent);
 
       return {
         success: true,
@@ -85,6 +68,8 @@ const resolvers = {
 };
 
 async function startServer() {
+  await connectCassandra();
+
   const app = express();
 
   app.use(cors());
@@ -112,7 +97,6 @@ async function startServer() {
       const newEvent = buildIncidentReportedEvent(incidentId, message);
 
       await publishIncidentReported(newEvent);
-      incidentEvents.push(newEvent);
 
       return res.status(201).json({
         ok: true,
