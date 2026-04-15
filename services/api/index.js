@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const { ApolloServer } = require("@apollo/server");
 const { expressMiddleware } = require("@as-integrations/express4");
+const { publishIncidentReported } = require("./kafka");
 
 const PORT = 4000;
 
@@ -22,6 +23,16 @@ const incidentEvents = [
   }
 ];
 
+function buildIncidentReportedEvent(incidentId, message) {
+  return {
+    id: `evt-${incidentEvents.length + 1}`,
+    incidentId,
+    type: "INCIDENT_REPORTED",
+    message,
+    timestamp: new Date().toISOString()
+  };
+}
+
 const typeDefs = `#graphql
   type IncidentEvent {
     id: ID!
@@ -29,11 +40,6 @@ const typeDefs = `#graphql
     type: String!
     message: String!
     timestamp: String!
-  }
-
-  type Incident {
-    incidentId: ID!
-    events: [IncidentEvent!]!
   }
 
   input CreateIncidentInput {
@@ -64,15 +70,10 @@ const resolvers = {
     }
   },
   Mutation: {
-    createIncident: (_, { input }) => {
-      const newEvent = {
-        id: `evt-${incidentEvents.length + 1}`,
-        incidentId: input.incidentId,
-        type: "INCIDENT_REPORTED",
-        message: input.message,
-        timestamp: new Date().toISOString()
-      };
+    createIncident: async (_, { input }) => {
+      const newEvent = buildIncidentReportedEvent(input.incidentId, input.message);
 
+      await publishIncidentReported(newEvent);
       incidentEvents.push(newEvent);
 
       return {
@@ -97,30 +98,34 @@ async function startServer() {
     });
   });
 
-  app.post("/incidents", (req, res) => {
-    const { incidentId, message } = req.body;
+  app.post("/incidents", async (req, res) => {
+    try {
+      const { incidentId, message } = req.body;
 
-    if (!incidentId || !message) {
-      return res.status(400).json({
+      if (!incidentId || !message) {
+        return res.status(400).json({
+          ok: false,
+          error: "incidentId and message are required"
+        });
+      }
+
+      const newEvent = buildIncidentReportedEvent(incidentId, message);
+
+      await publishIncidentReported(newEvent);
+      incidentEvents.push(newEvent);
+
+      return res.status(201).json({
+        ok: true,
+        event: newEvent
+      });
+    } catch (error) {
+      console.error("Failed to create incident:", error);
+
+      return res.status(500).json({
         ok: false,
-        error: "incidentId and message are required"
+        error: "Failed to publish incident event"
       });
     }
-
-    const newEvent = {
-      id: `evt-${incidentEvents.length + 1}`,
-      incidentId,
-      type: "INCIDENT_REPORTED",
-      message,
-      timestamp: new Date().toISOString()
-    };
-
-    incidentEvents.push(newEvent);
-
-    return res.status(201).json({
-      ok: true,
-      event: newEvent
-    });
   });
 
   const server = new ApolloServer({
