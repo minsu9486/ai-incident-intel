@@ -10,7 +10,23 @@ const consumer = kafka.consumer({
   groupId: `incident-events-dlq-replay-${Date.now()}`
 });
 
+const admin = kafka.admin();
+
+async function ensureTopicExists(topic) {
+  await admin.connect();
+
+  const topics = await admin.listTopics();
+
+  if (!topics.includes(topic)) {
+    throw new Error(`Topic "${topic}" does not exist yet. Create a DLQ message first.`);
+  }
+
+  await admin.disconnect();
+}
+
 async function replayDlqMessages() {
+  await ensureTopicExists("incident-events-dlq");
+
   await consumer.connect();
 
   await consumer.subscribe({
