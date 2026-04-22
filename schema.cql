@@ -11,3 +11,10 @@ CREATE TABLE IF NOT EXISTS incident_events_by_id (
   message text,
   PRIMARY KEY ((incident_id), event_timestamp, event_id)
 ) WITH CLUSTERING ORDER BY (event_timestamp DESC, event_id ASC);
+
+CREATE TABLE IF NOT EXISTS processed_messages (
+  consumer_group text,
+  message_id text,
+  processed_at timestamp,
+  PRIMARY KEY ((consumer_group), message_id)
+);

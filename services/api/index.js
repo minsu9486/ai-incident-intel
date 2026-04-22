@@ -7,9 +7,11 @@ const { connectCassandra, getIncidentTimeline } = require("./cassandra");
 
 const PORT = 4000;
 
+const crypto = require("crypto");
+
 function buildIncidentReportedEvent(incidentId, message) {
   return {
-    id: `evt-${Date.now()}`,
+    id: crypto.randomUUID(),
     incidentId,
     type: "INCIDENT_REPORTED",
     message,

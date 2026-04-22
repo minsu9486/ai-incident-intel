@@ -1,5 +1,9 @@
 const { Kafka } = require("kafkajs");
-const { connectCassandra, insertIncidentEvent } = require("./cassandra");
+const {
+  connectCassandra,
+  insertIncidentEvent,
+  markMessageProcessed
+} = require("./cassandra");
 const { publishToDlq } = require("./kafka");
 
 const kafka = new Kafka({
@@ -7,8 +11,10 @@ const kafka = new Kafka({
   brokers: ["localhost:9092"]
 });
 
+const CONSUMER_GROUP = "incident-events-projection-group";
+
 const consumer = kafka.consumer({
-  groupId: "incident-events-projection-group"
+  groupId: CONSUMER_GROUP
 });
 
 const MAX_RETRIES = 3;
@@ -19,17 +25,19 @@ function sleep(ms) {
 }
 
 async function processIncidentEvent(event) {
+  if (event.message.includes("FORCE_DLQ")) {
+    throw new Error("Forced failure for DLQ test");
+  }
+
+  const wasMarked = await markMessageProcessed(CONSUMER_GROUP, event.id);
+
+  if (!wasMarked) {
+    console.log(`Skipping duplicate event ${event.id}`);
+    return;
+  }
+
   await insertIncidentEvent(event);
 }
-
-// TEST: Force messages containing "FORCE_DLQ" to fail and go to DLQ
-// async function processIncidentEvent(event) {
-//   if (event.message.includes("FORCE_DLQ")) {
-//     throw new Error("Forced failure for DLQ test");
-//   }
-
-//   await insertIncidentEvent(event);
-// }
 
 async function processWithRetry(event, kafkaMetadata) {
   let lastError;
@@ -39,7 +47,7 @@ async function processWithRetry(event, kafkaMetadata) {
       await processIncidentEvent(event);
 
       console.log(
-        `Stored event ${event.id} in Cassandra on attempt ${attempt}`
+        `Processed event ${event.id} on attempt ${attempt}`
       );
 
       return;
@@ -93,7 +101,7 @@ async function startConsumer() {
         const event = JSON.parse(rawValue);
 
         console.log(
-          `Received message ${topic}[${partition}] offset=${message.offset} incidentId=${event.incidentId}`
+          `Received message ${topic}[${partition}] offset=${message.offset} eventId=${event.id}`
         );
 
         await processWithRetry(event, {

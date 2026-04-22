@@ -56,8 +56,30 @@ async function getIncidentTimeline(incidentId) {
   }));
 }
 
+async function markMessageProcessed(consumerGroup, messageId) {
+  const query = `
+    INSERT INTO processed_messages (
+      consumer_group,
+      message_id,
+      processed_at
+    ) VALUES (?, ?, ?)
+    IF NOT EXISTS
+  `;
+
+  const params = [
+    consumerGroup,
+    messageId,
+    new Date()
+  ];
+
+  const result = await client.execute(query, params, { prepare: true });
+
+  return result.first()["[applied]"] === true;
+}
+
 module.exports = {
   connectCassandra,
   insertIncidentEvent,
-  getIncidentTimeline
+  getIncidentTimeline,
+  markMessageProcessed
 };
