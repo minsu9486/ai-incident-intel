@@ -37,9 +37,7 @@ async function connectProducer() {
   }
 }
 
-async function publishIncidentReported(event) {
-  const topic = "incident-events";
-
+async function sendJsonMessage(topic, key, payload, headers = {}) {
   await ensureTopicExists(topic);
   await connectProducer();
 
@@ -47,13 +45,28 @@ async function publishIncidentReported(event) {
     topic,
     messages: [
       {
-        key: event.incidentId,
-        value: JSON.stringify(event)
+        key,
+        value: JSON.stringify(payload),
+        headers
       }
     ]
   });
 }
 
+async function publishIncidentReported(event) {
+  await sendJsonMessage("incident-events", event.incidentId, event);
+}
+
+async function publishToDlq(dlqPayload) {
+  await sendJsonMessage(
+    "incident-events-dlq",
+    dlqPayload.incidentId || "unknown",
+    dlqPayload
+  );
+}
+
 module.exports = {
-  publishIncidentReported
+  publishIncidentReported,
+  publishToDlq,
+  sendJsonMessage
 };
