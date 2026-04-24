@@ -56,6 +56,58 @@ async function getIncidentTimeline(incidentId) {
   }));
 }
 
+async function upsertServiceHealth(event) {
+  const query = `
+    INSERT INTO service_health_by_org (
+      org_id,
+      service_name,
+      latest_incident_id,
+      latest_event_id,
+      severity,
+      status,
+      last_updated,
+      message
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const status = event.severity === "CRITICAL" ? "DEGRADED" : "ACTIVE";
+
+  const params = [
+    event.orgId,
+    event.serviceName,
+    event.incidentId,
+    event.id,
+    event.severity,
+    status,
+    new Date(event.timestamp),
+    event.message
+  ];
+
+  await client.execute(query, params, { prepare: true });
+}
+
+async function getServiceHealthByOrg(orgId) {
+  const query = `
+    SELECT org_id, service_name, latest_incident_id, latest_event_id,
+           severity, status, last_updated, message
+    FROM service_health_by_org
+    WHERE org_id = ?
+  `;
+
+  const result = await client.execute(query, [orgId], { prepare: true });
+
+  return result.rows.map((row) => ({
+    orgId: row.org_id,
+    serviceName: row.service_name,
+    latestIncidentId: row.latest_incident_id,
+    latestEventId: row.latest_event_id,
+    severity: row.severity,
+    status: row.status,
+    lastUpdated: row.last_updated.toISOString(),
+    message: row.message
+  }));
+}
+
 async function markMessageProcessed(consumerGroup, messageId) {
   const query = `
     INSERT INTO processed_messages (
@@ -80,6 +132,8 @@ async function markMessageProcessed(consumerGroup, messageId) {
 module.exports = {
   connectCassandra,
   insertIncidentEvent,
+  upsertServiceHealth,
   getIncidentTimeline,
+  getServiceHealthByOrg,
   markMessageProcessed
 };

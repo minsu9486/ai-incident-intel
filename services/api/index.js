@@ -3,18 +3,25 @@ const cors = require("cors");
 const { ApolloServer } = require("@apollo/server");
 const { expressMiddleware } = require("@as-integrations/express4");
 const { publishIncidentReported } = require("./kafka");
-const { connectCassandra, getIncidentTimeline } = require("./cassandra");
+const {
+  connectCassandra,
+  getIncidentTimeline,
+  getServiceHealthByOrg
+} = require("./cassandra");
 
 const PORT = 4000;
 
 const crypto = require("crypto");
 
-function buildIncidentReportedEvent(incidentId, message) {
+function buildIncidentReportedEvent(input) {
   return {
     id: crypto.randomUUID(),
-    incidentId,
+    incidentId: input.incidentId,
+    orgId: input.orgId,
+    serviceName: input.serviceName,
+    severity: input.severity,
     type: "INCIDENT_REPORTED",
-    message,
+    message: input.message,
     timestamp: new Date().toISOString()
   };
 }
@@ -23,13 +30,30 @@ const typeDefs = `#graphql
   type IncidentEvent {
     id: ID!
     incidentId: ID!
+    orgId: ID
+    serviceName: String
+    severity: String
     type: String!
     message: String!
     timestamp: String!
   }
 
+  type ServiceHealth {
+    orgId: ID!
+    serviceName: String!
+    latestIncidentId: ID!
+    latestEventId: ID!
+    severity: String!
+    status: String!
+    lastUpdated: String!
+    message: String!
+  }
+
   input CreateIncidentInput {
     incidentId: ID!
+    orgId: ID!
+    serviceName: String!
+    severity: String!
     message: String!
   }
 
@@ -41,6 +65,7 @@ const typeDefs = `#graphql
   type Query {
     health: String!
     incidentTimeline(incidentId: ID!): [IncidentEvent!]!
+    serviceHealthByOrg(orgId: ID!): [ServiceHealth!]!
   }
 
   type Mutation {
@@ -53,11 +78,14 @@ const resolvers = {
     health: () => "ok",
     incidentTimeline: async (_, { incidentId }) => {
       return await getIncidentTimeline(incidentId);
+    },
+    serviceHealthByOrg: async (_, { orgId }) => {
+      return await getServiceHealthByOrg(orgId);
     }
   },
   Mutation: {
     createIncident: async (_, { input }) => {
-      const newEvent = buildIncidentReportedEvent(input.incidentId, input.message);
+      const newEvent = buildIncidentReportedEvent(input);
 
       await publishIncidentReported(newEvent);
 
@@ -87,16 +115,22 @@ async function startServer() {
 
   app.post("/incidents", async (req, res) => {
     try {
-      const { incidentId, message } = req.body;
+      const { incidentId, orgId, serviceName, severity, message } = req.body;
 
-      if (!incidentId || !message) {
+      if (!incidentId || !orgId || !serviceName || !severity || !message) {
         return res.status(400).json({
           ok: false,
-          error: "incidentId and message are required"
+          error: "incidentId, orgId, serviceName, severity, and message are required"
         });
       }
 
-      const newEvent = buildIncidentReportedEvent(incidentId, message);
+      const newEvent = buildIncidentReportedEvent({
+        incidentId,
+        orgId,
+        serviceName,
+        severity,
+        message
+      });
 
       await publishIncidentReported(newEvent);
 

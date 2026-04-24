@@ -18,3 +18,15 @@ CREATE TABLE IF NOT EXISTS processed_messages (
   processed_at timestamp,
   PRIMARY KEY ((consumer_group), message_id)
 );
+
+CREATE TABLE IF NOT EXISTS service_health_by_org (
+  org_id text,
+  service_name text,
+  latest_incident_id text,
+  latest_event_id text,
+  severity text,
+  status text,
+  last_updated timestamp,
+  message text,
+  PRIMARY KEY ((org_id), service_name)
+);

@@ -2,6 +2,7 @@ const { Kafka } = require("kafkajs");
 const {
   connectCassandra,
   insertIncidentEvent,
+  upsertServiceHealth,
   markMessageProcessed
 } = require("./cassandra");
 const { publishToDlq } = require("./kafka");
@@ -37,6 +38,7 @@ async function processIncidentEvent(event) {
   }
 
   await insertIncidentEvent(event);
+  await upsertServiceHealth(event);
 }
 
 async function processWithRetry(event, kafkaMetadata) {
