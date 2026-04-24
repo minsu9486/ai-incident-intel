@@ -1,17 +1,28 @@
 const express = require("express");
 const cors = require("cors");
+const multer = require("multer");
 const { ApolloServer } = require("@apollo/server");
 const { expressMiddleware } = require("@as-integrations/express4");
-const { publishIncidentReported } = require("./kafka");
+const { publishIncidentReported, publishArtifactAttached } = require("./kafka");
 const {
   connectCassandra,
   getIncidentTimeline,
   getServiceHealthByOrg
 } = require("./cassandra");
+const {
+  ensureBucketExists,
+  uploadArtifact,
+  getPresignedDownloadUrl
+} = require("./minio");
 
 const PORT = 4000;
 
 const crypto = require("crypto");
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 
 function buildIncidentReportedEvent(input) {
   return {
@@ -23,6 +34,17 @@ function buildIncidentReportedEvent(input) {
     type: "INCIDENT_REPORTED",
     message: input.message,
     timestamp: new Date().toISOString()
+  };
+}
+
+function buildArtifactAttachedEvent({ incidentId, artifact }) {
+  return {
+    id: crypto.randomUUID(),
+    incidentId,
+    type: "ARTIFACT_ATTACHED",
+    message: `Artifact attached: ${artifact.originalName}`,
+    timestamp: new Date().toISOString(),
+    artifact
   };
 }
 
@@ -99,6 +121,7 @@ const resolvers = {
 
 async function startServer() {
   await connectCassandra();
+  await ensureBucketExists();
 
   const app = express();
 
@@ -148,6 +171,84 @@ async function startServer() {
     }
   });
 
+  app.post("/artifacts/upload", upload.single("file"), async (req, res) => {
+    try {
+      const incidentId = req.body.incidentId;
+
+      if (!incidentId) {
+        return res.status(400).json({
+          ok: false,
+          error: "incidentId is required"
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          ok: false,
+          error: "file is required"
+        });
+      }
+
+      const safeFileName = req.file.originalname.replace(/\s+/g, "-");
+      const objectKey = `${incidentId}/${Date.now()}-${safeFileName}`;
+      const mimeType = req.file.mimetype || "application/octet-stream";
+
+      const putResult = await uploadArtifact({
+        objectKey,
+        buffer: req.file.buffer,
+        mimeType
+      });
+
+      const artifact = {
+        bucket: putResult.bucket,
+        objectKey: putResult.objectKey,
+        originalName: req.file.originalname,
+        mimeType,
+        size: req.file.size
+      };
+
+      const event = buildArtifactAttachedEvent({ incidentId, artifact });
+
+      await publishArtifactAttached(event);
+
+      return res.status(201).json({
+        ok: true,
+        artifact,
+        event
+      });
+    } catch (error) {
+      console.error("Artifact upload failed:", error);
+
+      return res.status(500).json({
+        ok: false,
+        error: "Artifact upload failed"
+      });
+    }
+  });
+
+  app.get("/artifacts/*/download-url", async (req, res) => {
+    try {
+      const wildcardPath = req.params[0];
+      const objectKey = decodeURIComponent(wildcardPath);
+
+      const url = await getPresignedDownloadUrl(objectKey);
+
+      return res.json({
+        ok: true,
+        objectKey,
+        downloadUrl: url,
+        expiresInSeconds: 900
+      });
+    } catch (error) {
+      console.error("Failed to generate download URL:", error);
+
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to generate signed download URL"
+      });
+    }
+  });
+
   const server = new ApolloServer({
     typeDefs,
     resolvers
@@ -160,6 +261,8 @@ async function startServer() {
   app.listen(PORT, () => {
     console.log(`REST health: http://localhost:${PORT}/health`);
     console.log(`REST create incident: POST http://localhost:${PORT}/incidents`);
+    console.log(`REST upload artifact: POST http://localhost:${PORT}/artifacts/upload`);
+    console.log(`REST signed URL: GET http://localhost:${PORT}/artifacts/<objectKey>/download-url`);
     console.log(`GraphQL endpoint: http://localhost:${PORT}/graphql`);
   });
 }

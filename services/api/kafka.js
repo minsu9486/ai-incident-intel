@@ -57,6 +57,10 @@ async function publishIncidentReported(event) {
   await sendJsonMessage("incident-events", event.incidentId, event);
 }
 
+async function publishArtifactAttached(event) {
+  await sendJsonMessage("incident-events", event.incidentId, event);
+}
+
 async function publishToDlq(dlqPayload) {
   await sendJsonMessage(
     "incident-events-dlq",
@@ -67,6 +71,7 @@ async function publishToDlq(dlqPayload) {
 
 module.exports = {
   publishIncidentReported,
+  publishArtifactAttached,
   publishToDlq,
   sendJsonMessage
 };

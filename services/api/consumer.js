@@ -30,6 +30,13 @@ async function processIncidentEvent(event) {
     throw new Error("Forced failure for DLQ test");
   }
 
+  if (event.type !== "INCIDENT_REPORTED") {
+    console.log(
+      `Skipping non-incident event ${event.id} (type=${event.type})`
+    );
+    return;
+  }
+
   const wasMarked = await markMessageProcessed(CONSUMER_GROUP, event.id);
 
   if (!wasMarked) {
