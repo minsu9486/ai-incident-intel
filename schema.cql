@@ -30,3 +30,15 @@ CREATE TABLE IF NOT EXISTS service_health_by_org (
   message text,
   PRIMARY KEY ((org_id), service_name)
 );
+
+CREATE TABLE IF NOT EXISTS artifacts_by_incident (
+  incident_id text,
+  uploaded_at timestamp,
+  artifact_id text,
+  bucket text,
+  object_key text,
+  original_name text,
+  mime_type text,
+  size_bytes bigint,
+  PRIMARY KEY ((incident_id), uploaded_at, artifact_id)
+) WITH CLUSTERING ORDER BY (uploaded_at DESC, artifact_id ASC);

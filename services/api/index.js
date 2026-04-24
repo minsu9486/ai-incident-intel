@@ -7,7 +7,8 @@ const { publishIncidentReported, publishArtifactAttached } = require("./kafka");
 const {
   connectCassandra,
   getIncidentTimeline,
-  getServiceHealthByOrg
+  getServiceHealthByOrg,
+  getArtifactsByIncident
 } = require("./cassandra");
 const {
   ensureBucketExists,
@@ -71,6 +72,18 @@ const typeDefs = `#graphql
     message: String!
   }
 
+  type IncidentArtifact {
+    artifactId: ID!
+    incidentId: ID!
+    bucket: String!
+    objectKey: String!
+    originalName: String!
+    mimeType: String!
+    sizeBytes: Int!
+    uploadedAt: String!
+    downloadUrl: String!
+  }
+
   input CreateIncidentInput {
     incidentId: ID!
     orgId: ID!
@@ -88,6 +101,7 @@ const typeDefs = `#graphql
     health: String!
     incidentTimeline(incidentId: ID!): [IncidentEvent!]!
     serviceHealthByOrg(orgId: ID!): [ServiceHealth!]!
+    incidentArtifacts(incidentId: ID!): [IncidentArtifact!]!
   }
 
   type Mutation {
@@ -103,6 +117,16 @@ const resolvers = {
     },
     serviceHealthByOrg: async (_, { orgId }) => {
       return await getServiceHealthByOrg(orgId);
+    },
+    incidentArtifacts: async (_, { incidentId }) => {
+      const artifacts = await getArtifactsByIncident(incidentId);
+
+      return await Promise.all(
+        artifacts.map(async (artifact) => ({
+          ...artifact,
+          downloadUrl: await getPresignedDownloadUrl(artifact.objectKey)
+        }))
+      );
     }
   },
   Mutation: {

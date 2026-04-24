@@ -108,6 +108,56 @@ async function getServiceHealthByOrg(orgId) {
   }));
 }
 
+async function insertArtifactMetadata(event) {
+  const query = `
+    INSERT INTO artifacts_by_incident (
+      incident_id,
+      uploaded_at,
+      artifact_id,
+      bucket,
+      object_key,
+      original_name,
+      mime_type,
+      size_bytes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const params = [
+    event.incidentId,
+    new Date(event.timestamp),
+    event.id,
+    event.artifact.bucket,
+    event.artifact.objectKey,
+    event.artifact.originalName,
+    event.artifact.mimeType,
+    event.artifact.size
+  ];
+
+  await client.execute(query, params, { prepare: true });
+}
+
+async function getArtifactsByIncident(incidentId) {
+  const query = `
+    SELECT incident_id, uploaded_at, artifact_id, bucket, object_key,
+           original_name, mime_type, size_bytes
+    FROM artifacts_by_incident
+    WHERE incident_id = ?
+  `;
+
+  const result = await client.execute(query, [incidentId], { prepare: true });
+
+  return result.rows.map((row) => ({
+    artifactId: row.artifact_id,
+    incidentId: row.incident_id,
+    bucket: row.bucket,
+    objectKey: row.object_key,
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    sizeBytes: Number(row.size_bytes),
+    uploadedAt: row.uploaded_at.toISOString()
+  }));
+}
+
 async function markMessageProcessed(consumerGroup, messageId) {
   const query = `
     INSERT INTO processed_messages (
@@ -133,7 +183,9 @@ module.exports = {
   connectCassandra,
   insertIncidentEvent,
   upsertServiceHealth,
+  insertArtifactMetadata,
   getIncidentTimeline,
   getServiceHealthByOrg,
+  getArtifactsByIncident,
   markMessageProcessed
 };

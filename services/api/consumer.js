@@ -3,6 +3,7 @@ const {
   connectCassandra,
   insertIncidentEvent,
   upsertServiceHealth,
+  insertArtifactMetadata,
   markMessageProcessed
 } = require("./cassandra");
 const { publishToDlq } = require("./kafka");
@@ -30,13 +31,6 @@ async function processIncidentEvent(event) {
     throw new Error("Forced failure for DLQ test");
   }
 
-  if (event.type !== "INCIDENT_REPORTED") {
-    console.log(
-      `Skipping non-incident event ${event.id} (type=${event.type})`
-    );
-    return;
-  }
-
   const wasMarked = await markMessageProcessed(CONSUMER_GROUP, event.id);
 
   if (!wasMarked) {
@@ -44,8 +38,19 @@ async function processIncidentEvent(event) {
     return;
   }
 
-  await insertIncidentEvent(event);
-  await upsertServiceHealth(event);
+  switch (event.type) {
+    case "INCIDENT_REPORTED":
+      await insertIncidentEvent(event);
+      await upsertServiceHealth(event);
+      return;
+    case "ARTIFACT_ATTACHED":
+      await insertArtifactMetadata(event);
+      return;
+    default:
+      console.log(
+        `Ignoring unknown event ${event.id} (type=${event.type})`
+      );
+  }
 }
 
 async function processWithRetry(event, kafkaMetadata) {
