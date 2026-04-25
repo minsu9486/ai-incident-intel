@@ -18,6 +18,7 @@ pids/
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Dependency directories
 jspm_packages/

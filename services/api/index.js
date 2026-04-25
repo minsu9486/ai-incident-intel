@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -15,6 +17,7 @@ const {
   uploadArtifact,
   getPresignedDownloadUrl
 } = require("./minio");
+const { generateIncidentSummary } = require("./gemini");
 
 const PORT = 4000;
 
@@ -84,6 +87,16 @@ const typeDefs = `#graphql
     downloadUrl: String!
   }
 
+  type IncidentSummary {
+    incidentId: ID!
+    summary: String!
+    customerImpact: String!
+    likelyRootCause: String!
+    confidence: String!
+    nextActions: [String!]!
+    signals: [String!]!
+  }
+
   input CreateIncidentInput {
     incidentId: ID!
     orgId: ID!
@@ -102,12 +115,28 @@ const typeDefs = `#graphql
     incidentTimeline(incidentId: ID!): [IncidentEvent!]!
     serviceHealthByOrg(orgId: ID!): [ServiceHealth!]!
     incidentArtifacts(incidentId: ID!): [IncidentArtifact!]!
+    incidentSummary(incidentId: ID!, orgId: ID, limit: Int = 20): IncidentSummary!
   }
 
   type Mutation {
     createIncident(input: CreateIncidentInput!): CreateIncidentPayload!
   }
 `;
+
+async function buildSummary({ incidentId, orgId, limit }) {
+  const allEvents = await getIncidentTimeline(incidentId);
+  const events = allEvents.slice(0, limit);
+
+  if (events.length === 0) {
+    const err = new Error(`No events found for incident ${incidentId}`);
+    err.code = "NOT_FOUND";
+    throw err;
+  }
+
+  const serviceHealth = orgId ? await getServiceHealthByOrg(orgId) : [];
+
+  return generateIncidentSummary({ incidentId, orgId, events, serviceHealth });
+}
 
 const resolvers = {
   Query: {
@@ -127,6 +156,18 @@ const resolvers = {
           downloadUrl: await getPresignedDownloadUrl(artifact.objectKey)
         }))
       );
+    },
+    incidentSummary: async (_, { incidentId, orgId, limit }) => {
+      const out = await buildSummary({ incidentId, orgId, limit });
+      return {
+        incidentId,
+        summary: out.summary,
+        customerImpact: out.customer_impact,
+        likelyRootCause: out.likely_root_cause,
+        confidence: out.confidence,
+        nextActions: out.next_actions,
+        signals: out.signals
+      };
     }
   },
   Mutation: {
@@ -250,6 +291,31 @@ async function startServer() {
     }
   });
 
+  app.post("/ai/incident-summary", async (req, res) => {
+    try {
+      const { incidentId, orgId, limit = 20 } = req.body || {};
+
+      if (!incidentId) {
+        return res.status(400).json({
+          ok: false,
+          error: "incidentId is required"
+        });
+      }
+
+      const summary = await buildSummary({ incidentId, orgId, limit });
+
+      return res.json({ ok: true, incidentId, ...summary });
+    } catch (error) {
+      console.error("AI incident summary failed:", error);
+
+      const status = error.code === "NOT_FOUND" ? 404 : 500;
+      return res.status(status).json({
+        ok: false,
+        error: error.message || "Failed to generate incident summary"
+      });
+    }
+  });
+
   app.get("/artifacts/*/download-url", async (req, res) => {
     try {
       const wildcardPath = req.params[0];
@@ -287,6 +353,7 @@ async function startServer() {
     console.log(`REST create incident: POST http://localhost:${PORT}/incidents`);
     console.log(`REST upload artifact: POST http://localhost:${PORT}/artifacts/upload`);
     console.log(`REST signed URL: GET http://localhost:${PORT}/artifacts/<objectKey>/download-url`);
+    console.log(`REST AI summary: POST http://localhost:${PORT}/ai/incident-summary`);
     console.log(`GraphQL endpoint: http://localhost:${PORT}/graphql`);
   });
 }
