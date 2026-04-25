@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node index.js",
     "consumer": "node consumer.js",
-    "replay-dlq": "node replay-dlq.js"
+    "replay-dlq": "node replay-dlq.js",
+    "smoke-gemini": "node smoke-gemini.js",
+    "smoke-gemini-http": "node smoke-gemini-http.js"
   },
   "keywords": [
     "graphql",
