@@ -230,7 +230,7 @@ async function main() {
   console.log("");
   console.log("GraphQL response:");
   console.log(JSON.stringify(gqlOut, null, 2));
-  process.exit(0);
+  setImmediate(() => process.exit(0));
 }
 
 main().catch((err) => {

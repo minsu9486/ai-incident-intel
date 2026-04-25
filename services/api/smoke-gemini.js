@@ -151,7 +151,7 @@ async function main() {
   console.log("");
   console.log("response:");
   console.log(JSON.stringify(out, null, 2));
-  process.exit(0);
+  setImmediate(() => process.exit(0));
 }
 
 main();
