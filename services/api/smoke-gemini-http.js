@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+const { getGlobalDispatcher } = require("undici");
+
 const API_BASE = "http://localhost:4000";
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 15000;
@@ -230,7 +232,8 @@ async function main() {
   console.log("");
   console.log("GraphQL response:");
   console.log(JSON.stringify(gqlOut, null, 2));
-  setImmediate(() => process.exit(0));
+  await getGlobalDispatcher().close();
+  process.exit(0);
 }
 
 main().catch((err) => {
