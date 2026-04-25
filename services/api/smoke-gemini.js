@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const { generateIncidentSummary } = require("./gemini");
+const { getGlobalDispatcher } = require("undici");
 
 const REQUIRED_FIELDS = [
   "summary",
@@ -151,6 +152,7 @@ async function main() {
   console.log("");
   console.log("response:");
   console.log(JSON.stringify(out, null, 2));
+  await getGlobalDispatcher().close();
   process.exit(0);
 }
 
