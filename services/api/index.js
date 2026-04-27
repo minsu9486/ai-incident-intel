@@ -10,7 +10,8 @@ const {
   connectCassandra,
   getIncidentTimeline,
   getServiceHealthByOrg,
-  getArtifactsByIncident
+  getArtifactsByIncident,
+  findSimilarIncidentsByVector
 } = require("./cassandra");
 const {
   ensureBucketExists,
@@ -18,6 +19,10 @@ const {
   getPresignedDownloadUrl
 } = require("./minio");
 const { generateIncidentSummary } = require("./gemini");
+const {
+  buildIncidentEmbeddingText,
+  embedQuery
+} = require("./embeddings");
 
 const PORT = 4000;
 
@@ -97,6 +102,15 @@ const typeDefs = `#graphql
     signals: [String!]!
   }
 
+  type SimilarIncidentMatch {
+    incidentId: ID!
+    orgId: ID
+    serviceName: String
+    severity: String
+    message: String!
+    score: Float!
+  }
+
   input CreateIncidentInput {
     incidentId: ID!
     orgId: ID!
@@ -116,12 +130,36 @@ const typeDefs = `#graphql
     serviceHealthByOrg(orgId: ID!): [ServiceHealth!]!
     incidentArtifacts(incidentId: ID!): [IncidentArtifact!]!
     incidentSummary(incidentId: ID!, orgId: ID, limit: Int = 20): IncidentSummary!
+    similarIncidents(
+      incidentId: ID!
+      orgId: ID
+      serviceName: String
+      severity: String
+      message: String!
+      k: Int = 3
+    ): [SimilarIncidentMatch!]!
   }
 
   type Mutation {
     createIncident(input: CreateIncidentInput!): CreateIncidentPayload!
   }
 `;
+
+async function findSimilar({ incidentId, orgId, serviceName, severity, message, k }) {
+  const queryText = buildIncidentEmbeddingText({
+    incidentId,
+    orgId,
+    serviceName,
+    severity,
+    message
+  });
+  const queryEmbedding = await embedQuery(queryText);
+  const topK = Math.max(1, k || 3);
+  const candidates = await findSimilarIncidentsByVector(queryEmbedding, topK);
+  return candidates
+    .filter((row) => row.incidentId !== incidentId)
+    .slice(0, topK);
+}
 
 async function buildSummary({ incidentId, orgId, limit }) {
   const allEvents = await getIncidentTimeline(incidentId);
@@ -168,6 +206,9 @@ const resolvers = {
         nextActions: out.next_actions,
         signals: out.signals
       };
+    },
+    similarIncidents: async (_, args) => {
+      return await findSimilar(args);
     }
   },
   Mutation: {
@@ -316,6 +357,44 @@ async function startServer() {
     }
   });
 
+  app.post("/ai/similar-incidents", async (req, res) => {
+    try {
+      const {
+        incidentId,
+        orgId,
+        serviceName,
+        severity,
+        message,
+        k = 3
+      } = req.body || {};
+
+      if (!incidentId || !message) {
+        return res.status(400).json({
+          ok: false,
+          error: "incidentId and message are required"
+        });
+      }
+
+      const matches = await findSimilar({
+        incidentId,
+        orgId,
+        serviceName,
+        severity,
+        message,
+        k
+      });
+
+      return res.json({ ok: true, matches });
+    } catch (error) {
+      console.error("Similar incident lookup failed:", error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Similar incident lookup failed"
+      });
+    }
+  });
+
   app.get("/artifacts/*/download-url", async (req, res) => {
     try {
       const wildcardPath = req.params[0];
@@ -354,6 +433,7 @@ async function startServer() {
     console.log(`REST upload artifact: POST http://localhost:${PORT}/artifacts/upload`);
     console.log(`REST signed URL: GET http://localhost:${PORT}/artifacts/<objectKey>/download-url`);
     console.log(`REST AI summary: POST http://localhost:${PORT}/ai/incident-summary`);
+    console.log(`REST AI similar incidents: POST http://localhost:${PORT}/ai/similar-incidents`);
     console.log(`GraphQL endpoint: http://localhost:${PORT}/graphql`);
   });
 }
