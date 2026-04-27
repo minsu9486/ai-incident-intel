@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const { Kafka } = require("kafkajs");
 const {
   connectCassandra,
@@ -60,6 +62,7 @@ async function processIncidentEvent(event) {
 }
 
 async function tryIndexIncidentEmbedding(event) {
+  const startedAt = Date.now();
   try {
     const embeddingText = buildIncidentEmbeddingText({
       incidentId: event.incidentId,
@@ -78,6 +81,9 @@ async function tryIndexIncidentEmbedding(event) {
       embeddingText,
       embedding
     });
+    console.log(
+      `Indexed embedding for incidentId=${event.incidentId} in ${Date.now() - startedAt}ms`
+    );
   } catch (error) {
     console.error(
       `Embedding step skipped for incidentId=${event.incidentId}:`,
