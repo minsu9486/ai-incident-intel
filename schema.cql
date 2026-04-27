@@ -58,3 +58,20 @@ CREATE INDEX IF NOT EXISTS incident_embeddings_ann_idx
   ON incident_embeddings(embedding)
   USING 'sai'
   WITH OPTIONS = {'similarity_function': 'cosine'};
+
+CREATE TABLE IF NOT EXISTS runbook_embeddings (
+  runbook_id text PRIMARY KEY,
+  title text,
+  services list<text>,
+  severities list<text>,
+  tags list<text>,
+  content text,
+  embedding_text text,
+  embedding VECTOR<FLOAT, 768>,
+  indexed_at timestamp
+);
+
+CREATE INDEX IF NOT EXISTS runbook_embeddings_ann_idx
+  ON runbook_embeddings(embedding)
+  USING 'sai'
+  WITH OPTIONS = {'similarity_function': 'cosine'};

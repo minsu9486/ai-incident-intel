@@ -10,7 +10,9 @@
     "replay-dlq": "node replay-dlq.js",
     "smoke-gemini": "node smoke-gemini.js",
     "smoke-gemini-http": "node smoke-gemini-http.js",
-    "smoke-similar": "node smoke-similar.js"
+    "smoke-similar": "node smoke-similar.js",
+    "smoke-recommended": "node smoke-recommended.js",
+    "index-runbooks": "node index-runbooks.js"
   },
   "keywords": [
     "graphql",

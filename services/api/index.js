@@ -10,8 +10,7 @@ const {
   connectCassandra,
   getIncidentTimeline,
   getServiceHealthByOrg,
-  getArtifactsByIncident,
-  findSimilarIncidentsByVector
+  getArtifactsByIncident
 } = require("./cassandra");
 const {
   ensureBucketExists,
@@ -19,10 +18,8 @@ const {
   getPresignedDownloadUrl
 } = require("./minio");
 const { generateIncidentSummary } = require("./gemini");
-const {
-  buildIncidentEmbeddingText,
-  embedQuery
-} = require("./embeddings");
+const { findSimilarIncidents } = require("./retrieval");
+const { generateRecommendedActions } = require("./recommendations");
 
 const PORT = 4000;
 
@@ -111,6 +108,20 @@ const typeDefs = `#graphql
     score: Float!
   }
 
+  type RecommendedAction {
+    priority: Int!
+    action: String!
+    reason: String!
+    confidence: String!
+    risk: String!
+  }
+
+  type RecommendedActions {
+    incidentId: ID!
+    actions: [RecommendedAction!]!
+    notes: String!
+  }
+
   input CreateIncidentInput {
     incidentId: ID!
     orgId: ID!
@@ -138,28 +149,13 @@ const typeDefs = `#graphql
       message: String!
       k: Int = 3
     ): [SimilarIncidentMatch!]!
+    recommendedActions(incidentId: ID!, k: Int = 3): RecommendedActions!
   }
 
   type Mutation {
     createIncident(input: CreateIncidentInput!): CreateIncidentPayload!
   }
 `;
-
-async function findSimilar({ incidentId, orgId, serviceName, severity, message, k }) {
-  const queryText = buildIncidentEmbeddingText({
-    incidentId,
-    orgId,
-    serviceName,
-    severity,
-    message
-  });
-  const queryEmbedding = await embedQuery(queryText);
-  const topK = Math.max(1, k || 3);
-  const candidates = await findSimilarIncidentsByVector(queryEmbedding, topK);
-  return candidates
-    .filter((row) => row.incidentId !== incidentId)
-    .slice(0, topK);
-}
 
 async function buildSummary({ incidentId, orgId, limit }) {
   const allEvents = await getIncidentTimeline(incidentId);
@@ -208,7 +204,15 @@ const resolvers = {
       };
     },
     similarIncidents: async (_, args) => {
-      return await findSimilar(args);
+      return await findSimilarIncidents(args);
+    },
+    recommendedActions: async (_, { incidentId, k }) => {
+      const out = await generateRecommendedActions({ incidentId, k });
+      return {
+        incidentId,
+        actions: out.actions,
+        notes: out.notes
+      };
     }
   },
   Mutation: {
@@ -375,7 +379,7 @@ async function startServer() {
         });
       }
 
-      const matches = await findSimilar({
+      const matches = await findSimilarIncidents({
         incidentId,
         orgId,
         serviceName,
@@ -391,6 +395,48 @@ async function startServer() {
       return res.status(500).json({
         ok: false,
         error: error.message || "Similar incident lookup failed"
+      });
+    }
+  });
+
+  app.post("/ai/recommended-actions", async (req, res) => {
+    try {
+      const { incidentId, k = 3 } = req.body || {};
+
+      if (!incidentId) {
+        return res.status(400).json({
+          ok: false,
+          error: "incidentId is required"
+        });
+      }
+
+      const out = await generateRecommendedActions({ incidentId, k });
+
+      return res.json({
+        ok: true,
+        incidentId,
+        recommendations: {
+          actions: out.actions,
+          notes: out.notes
+        },
+        retrieved: {
+          similarIncidents: out.similarIncidents,
+          runbooks: out.runbooks.map((r) => ({
+            runbookId: r.runbookId,
+            title: r.title,
+            services: r.services,
+            severities: r.severities,
+            score: r.score
+          }))
+        }
+      });
+    } catch (error) {
+      console.error("Recommended actions generation failed:", error);
+
+      const status = error.code === "NOT_FOUND" ? 404 : 500;
+      return res.status(status).json({
+        ok: false,
+        error: error.message || "Recommended actions generation failed"
       });
     }
   });
@@ -434,6 +480,7 @@ async function startServer() {
     console.log(`REST signed URL: GET http://localhost:${PORT}/artifacts/<objectKey>/download-url`);
     console.log(`REST AI summary: POST http://localhost:${PORT}/ai/incident-summary`);
     console.log(`REST AI similar incidents: POST http://localhost:${PORT}/ai/similar-incidents`);
+    console.log(`REST AI recommended actions: POST http://localhost:${PORT}/ai/recommended-actions`);
     console.log(`GraphQL endpoint: http://localhost:${PORT}/graphql`);
   });
 }

@@ -198,6 +198,26 @@ async function upsertIncidentEmbedding({
   await client.execute(query, params, { prepare: true });
 }
 
+async function getIncidentLatestSnapshot(incidentId) {
+  const query = `
+    SELECT incident_id, org_id, service_name, severity, message
+    FROM incident_embeddings
+    WHERE incident_id = ?
+  `;
+
+  const result = await client.execute(query, [incidentId], { prepare: true });
+  if (result.rows.length === 0) return null;
+
+  const row = result.rows[0];
+  return {
+    incidentId: row.incident_id,
+    orgId: row.org_id,
+    serviceName: row.service_name,
+    severity: row.severity,
+    message: row.message
+  };
+}
+
 async function findSimilarIncidentsByVector(queryEmbedding, k) {
   const overshoot = Math.max(k + 1, 1);
   const query = `
@@ -223,6 +243,83 @@ async function findSimilarIncidentsByVector(queryEmbedding, k) {
     message: row.message,
     score: row.score
   }));
+}
+
+async function upsertRunbookEmbedding({
+  runbookId,
+  title,
+  services,
+  severities,
+  tags,
+  content,
+  embeddingText,
+  embedding
+}) {
+  const query = `
+    INSERT INTO runbook_embeddings (
+      runbook_id,
+      title,
+      services,
+      severities,
+      tags,
+      content,
+      embedding_text,
+      embedding,
+      indexed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const params = [
+    runbookId,
+    title,
+    services || [],
+    severities || [],
+    tags || [],
+    content,
+    embeddingText,
+    toVector(embedding),
+    new Date()
+  ];
+
+  await client.execute(query, params, { prepare: true });
+}
+
+async function findSimilarRunbooksByVector(queryEmbedding, k, filters = {}) {
+  const { serviceName, severity } = filters;
+  const overshoot = Math.max(k * 4, 8);
+  const query = `
+    SELECT runbook_id, title, services, severities, tags, content,
+           similarity_cosine(embedding, ?) AS score
+    FROM runbook_embeddings
+    ORDER BY embedding ANN OF ?
+    LIMIT ?
+  `;
+
+  const queryVec = toVector(queryEmbedding);
+  const result = await client.execute(
+    query,
+    [queryVec, queryVec, overshoot],
+    { prepare: true }
+  );
+
+  const rows = result.rows.map((row) => ({
+    runbookId: row.runbook_id,
+    title: row.title,
+    services: row.services || [],
+    severities: row.severities || [],
+    tags: row.tags || [],
+    content: row.content,
+    score: row.score
+  }));
+
+  return rows
+    .filter((r) =>
+      !serviceName || r.services.length === 0 || r.services.includes(serviceName)
+    )
+    .filter((r) =>
+      !severity || r.severities.length === 0 || r.severities.includes(severity)
+    )
+    .slice(0, k);
 }
 
 async function markMessageProcessed(consumerGroup, messageId) {
@@ -256,5 +353,8 @@ module.exports = {
   getArtifactsByIncident,
   upsertIncidentEmbedding,
   findSimilarIncidentsByVector,
+  getIncidentLatestSnapshot,
+  upsertRunbookEmbedding,
+  findSimilarRunbooksByVector,
   markMessageProcessed
 };
