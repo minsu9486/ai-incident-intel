@@ -11,7 +11,8 @@ const { embedDocument } = require("./embeddings");
 const RUNBOOKS_DIR = path.join(__dirname, "runbooks");
 
 function parseFrontMatter(raw) {
-  const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  const normalized = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const match = normalized.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match) {
     throw new Error("missing front-matter (expected --- … --- block at top)");
   }
