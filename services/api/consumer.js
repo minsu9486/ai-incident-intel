@@ -4,9 +4,14 @@ const {
   insertIncidentEvent,
   upsertServiceHealth,
   insertArtifactMetadata,
+  upsertIncidentEmbedding,
   markMessageProcessed
 } = require("./cassandra");
 const { publishToDlq } = require("./kafka");
+const {
+  buildIncidentEmbeddingText,
+  embedDocument
+} = require("./embeddings");
 
 const kafka = new Kafka({
   clientId: "ai-incident-consumer",
@@ -42,6 +47,7 @@ async function processIncidentEvent(event) {
     case "INCIDENT_REPORTED":
       await insertIncidentEvent(event);
       await upsertServiceHealth(event);
+      await tryIndexIncidentEmbedding(event);
       return;
     case "ARTIFACT_ATTACHED":
       await insertArtifactMetadata(event);
@@ -50,6 +56,33 @@ async function processIncidentEvent(event) {
       console.log(
         `Ignoring unknown event ${event.id} (type=${event.type})`
       );
+  }
+}
+
+async function tryIndexIncidentEmbedding(event) {
+  try {
+    const embeddingText = buildIncidentEmbeddingText({
+      incidentId: event.incidentId,
+      orgId: event.orgId,
+      serviceName: event.serviceName,
+      severity: event.severity,
+      message: event.message
+    });
+    const embedding = await embedDocument(embeddingText);
+    await upsertIncidentEmbedding({
+      incidentId: event.incidentId,
+      orgId: event.orgId,
+      serviceName: event.serviceName,
+      severity: event.severity,
+      message: event.message,
+      embeddingText,
+      embedding
+    });
+  } catch (error) {
+    console.error(
+      `Embedding step skipped for incidentId=${event.incidentId}:`,
+      error.message
+    );
   }
 }
 
