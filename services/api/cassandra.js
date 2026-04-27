@@ -6,6 +6,10 @@ const client = new cassandra.Client({
   keyspace: "ai_incident_intel"
 });
 
+function toVector(values) {
+  return new cassandra.types.Vector(Float32Array.from(values), "float");
+}
+
 let connected = false;
 
 async function connectCassandra() {
@@ -187,7 +191,7 @@ async function upsertIncidentEmbedding({
     severity || null,
     message || "",
     embeddingText,
-    embedding,
+    toVector(embedding),
     new Date()
   ];
 
@@ -204,9 +208,10 @@ async function findSimilarIncidentsByVector(queryEmbedding, k) {
     LIMIT ?
   `;
 
+  const queryVec = toVector(queryEmbedding);
   const result = await client.execute(
     query,
-    [queryEmbedding, queryEmbedding, overshoot],
+    [queryVec, queryVec, overshoot],
     { prepare: true }
   );
 
