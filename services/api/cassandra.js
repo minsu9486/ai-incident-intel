@@ -158,6 +158,68 @@ async function getArtifactsByIncident(incidentId) {
   }));
 }
 
+async function upsertIncidentEmbedding({
+  incidentId,
+  orgId,
+  serviceName,
+  severity,
+  message,
+  embeddingText,
+  embedding
+}) {
+  const query = `
+    INSERT INTO incident_embeddings (
+      incident_id,
+      org_id,
+      service_name,
+      severity,
+      message,
+      embedding_text,
+      embedding,
+      indexed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const params = [
+    incidentId,
+    orgId || null,
+    serviceName || null,
+    severity || null,
+    message || "",
+    embeddingText,
+    embedding,
+    new Date()
+  ];
+
+  await client.execute(query, params, { prepare: true });
+}
+
+async function findSimilarIncidentsByVector(queryEmbedding, k) {
+  const overshoot = Math.max(k + 1, 1);
+  const query = `
+    SELECT incident_id, org_id, service_name, severity, message,
+           similarity_cosine(embedding, ?) AS score
+    FROM incident_embeddings
+    ORDER BY embedding ANN OF ?
+    LIMIT ?
+  `;
+
+  const result = await client.execute(
+    query,
+    [queryEmbedding, queryEmbedding, overshoot],
+    { prepare: true }
+  );
+
+  return result.rows.map((row) => ({
+    incidentId: row.incident_id,
+    orgId: row.org_id,
+    serviceName: row.service_name,
+    severity: row.severity,
+    message: row.message,
+    score: row.score
+  }));
+}
+
 async function markMessageProcessed(consumerGroup, messageId) {
   const query = `
     INSERT INTO processed_messages (
@@ -187,5 +249,7 @@ module.exports = {
   getIncidentTimeline,
   getServiceHealthByOrg,
   getArtifactsByIncident,
+  upsertIncidentEmbedding,
+  findSimilarIncidentsByVector,
   markMessageProcessed
 };

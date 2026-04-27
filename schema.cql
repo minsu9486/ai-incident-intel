@@ -42,3 +42,19 @@ CREATE TABLE IF NOT EXISTS artifacts_by_incident (
   size_bytes bigint,
   PRIMARY KEY ((incident_id), uploaded_at, artifact_id)
 ) WITH CLUSTERING ORDER BY (uploaded_at DESC, artifact_id ASC);
+
+CREATE TABLE IF NOT EXISTS incident_embeddings (
+  incident_id text PRIMARY KEY,
+  org_id text,
+  service_name text,
+  severity text,
+  message text,
+  embedding_text text,
+  embedding VECTOR<FLOAT, 768>,
+  indexed_at timestamp
+);
+
+CREATE INDEX IF NOT EXISTS incident_embeddings_ann_idx
+  ON incident_embeddings(embedding)
+  USING 'sai'
+  WITH OPTIONS = {'similarity_function': 'cosine'};
