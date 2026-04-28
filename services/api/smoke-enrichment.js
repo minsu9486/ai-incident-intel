@@ -44,7 +44,7 @@ const FORCE_DLQ_INCIDENT = {
   serviceName: "payments-api",
   severity: "HIGH",
   message:
-    "Payments dependency timing out — FORCE_DLQ_ENRICH (this should fail enrichment but the original projection must still land)."
+    "Payments dependency timing out — BREAK_ENRICH (this should fail enrichment but the original projection must still land)."
 };
 
 const EXPECTED_TEAM = "payments";

@@ -117,7 +117,7 @@ async function enrichIncidentEvent(event) {
     return;
   }
 
-  if (typeof event.message === "string" && event.message.includes("FORCE_DLQ_ENRICH")) {
+  if (typeof event.message === "string" && event.message.includes("BREAK_ENRICH")) {
     throw new Error("Forced enrichment failure for DLQ test");
   }
 
