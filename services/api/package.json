@@ -15,6 +15,7 @@
     "smoke-recommended": "node smoke-recommended.js",
     "smoke-enrichment": "node smoke-enrichment.js",
     "index-runbooks": "node index-runbooks.js",
+    "demo": "node demo.js",
     "test": "jest --forceExit"
   },
   "jest": {
