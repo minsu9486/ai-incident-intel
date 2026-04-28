@@ -1,3 +1,14 @@
+/**
+ * smoke-similar: end-to-end smoke for similar-incident retrieval.
+ * Seeds 3 incidents (2 payments-api, 1 auth-service), polls until all are
+ * indexed in incident_embeddings, then asserts that POST /ai/similar-incidents
+ * and GraphQL similarIncidents both rank the payments incidents above the auth
+ * incident and filter out the self-match.
+ *
+ * Requires: Docker stack up, `npm start`, and `npm run consumer` running;
+ *           GEMINI_API_KEY set in the smoke process, API, and consumer.
+ * Run:      npm run smoke-similar
+ */
 require("dotenv").config();
 
 const { getGlobalDispatcher } = require("undici");

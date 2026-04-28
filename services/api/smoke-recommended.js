@@ -1,3 +1,15 @@
+/**
+ * smoke-recommended: end-to-end smoke for recommended-actions RAG.
+ * Seeds an incident, waits for embedding indexing, then validates
+ * POST /ai/recommended-actions and the GraphQL recommendedActions query:
+ * exactly 3 actions, priority-sorted ascending, confidence/risk in
+ * {LOW,MEDIUM,HIGH}. Also exercises 400 (missing incidentId) and 404 (unknown
+ * incidentId) guards.
+ *
+ * Requires: Docker stack up, `npm start`, `npm run consumer`, and
+ *           `npm run index-runbooks` already executed; GEMINI_API_KEY set.
+ * Run:      npm run smoke-recommended
+ */
 require("dotenv").config();
 
 const { getGlobalDispatcher } = require("undici");

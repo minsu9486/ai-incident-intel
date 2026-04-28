@@ -1,3 +1,12 @@
+/**
+ * smoke-gemini: unit-style smoke for generateIncidentSummary() from ./gemini.
+ * Builds a synthetic incident (events + serviceHealth), calls Gemini directly,
+ * and validates the structured JSON response shape. Does not touch Kafka,
+ * Cassandra, or the HTTP API.
+ *
+ * Requires: GEMINI_API_KEY in services/api/.env (or exported).
+ * Run:      npm run smoke-gemini
+ */
 require("dotenv").config();
 
 const { generateIncidentSummary } = require("./gemini");

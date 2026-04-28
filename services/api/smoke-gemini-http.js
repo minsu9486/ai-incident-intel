@@ -1,3 +1,13 @@
+/**
+ * smoke-gemini-http: full HTTP-path smoke for incident-summary.
+ * Posts an incident, polls incidentTimeline until the consumer projects it,
+ * then validates POST /ai/incident-summary and the GraphQL incidentSummary
+ * query (snake_case REST vs camelCase GraphQL field shapes).
+ *
+ * Requires: Docker stack up (docker compose up -d), `npm start`, and
+ *           `npm run consumer` running; GEMINI_API_KEY set for the API process.
+ * Run:      npm run smoke-gemini-http
+ */
 require("dotenv").config();
 
 const { getGlobalDispatcher } = require("undici");
