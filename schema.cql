@@ -75,3 +75,29 @@ CREATE INDEX IF NOT EXISTS runbook_embeddings_ann_idx
   ON runbook_embeddings(embedding)
   USING 'sai'
   WITH OPTIONS = {'similarity_function': 'cosine'};
+
+CREATE TABLE IF NOT EXISTS incidents_by_team (
+  team_id text,
+  reported_at timestamp,
+  incident_id text,
+  org_id text,
+  service_name text,
+  severity text,
+  severity_bucket text,
+  message text,
+  source_event_id text,
+  PRIMARY KEY ((team_id), reported_at, incident_id)
+) WITH CLUSTERING ORDER BY (reported_at DESC, incident_id ASC);
+
+CREATE TABLE IF NOT EXISTS incidents_by_severity (
+  severity_bucket text,
+  day_bucket text,
+  reported_at timestamp,
+  incident_id text,
+  org_id text,
+  service_name text,
+  team_id text,
+  message text,
+  source_event_id text,
+  PRIMARY KEY ((severity_bucket, day_bucket), reported_at, incident_id)
+) WITH CLUSTERING ORDER BY (reported_at DESC, incident_id ASC);

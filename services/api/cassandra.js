@@ -322,6 +322,116 @@ async function findSimilarRunbooksByVector(queryEmbedding, k, filters = {}) {
     .slice(0, k);
 }
 
+async function insertIncidentByTeam(enrichedEvent) {
+  const query = `
+    INSERT INTO incidents_by_team (
+      team_id,
+      reported_at,
+      incident_id,
+      org_id,
+      service_name,
+      severity,
+      severity_bucket,
+      message,
+      source_event_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const params = [
+    enrichedEvent.teamId,
+    new Date(enrichedEvent.timestamp),
+    enrichedEvent.incidentId,
+    enrichedEvent.orgId || null,
+    enrichedEvent.serviceName || null,
+    enrichedEvent.severity || null,
+    enrichedEvent.severityBucket || null,
+    enrichedEvent.message || "",
+    enrichedEvent.sourceEventId || null
+  ];
+
+  await client.execute(query, params, { prepare: true });
+}
+
+async function getIncidentsByTeam(teamId, limit) {
+  const query = `
+    SELECT team_id, reported_at, incident_id, org_id, service_name,
+           severity, severity_bucket, message, source_event_id
+    FROM incidents_by_team
+    WHERE team_id = ?
+    LIMIT ?
+  `;
+
+  const result = await client.execute(query, [teamId, limit], { prepare: true });
+
+  return result.rows.map((row) => ({
+    incidentId: row.incident_id,
+    orgId: row.org_id,
+    serviceName: row.service_name,
+    teamId: row.team_id,
+    severity: row.severity,
+    severityBucket: row.severity_bucket,
+    message: row.message,
+    reportedAt: row.reported_at.toISOString()
+  }));
+}
+
+async function insertIncidentBySeverity(enrichedEvent) {
+  const query = `
+    INSERT INTO incidents_by_severity (
+      severity_bucket,
+      day_bucket,
+      reported_at,
+      incident_id,
+      org_id,
+      service_name,
+      team_id,
+      message,
+      source_event_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const params = [
+    enrichedEvent.severityBucket,
+    enrichedEvent.dayBucket,
+    new Date(enrichedEvent.timestamp),
+    enrichedEvent.incidentId,
+    enrichedEvent.orgId || null,
+    enrichedEvent.serviceName || null,
+    enrichedEvent.teamId || null,
+    enrichedEvent.message || "",
+    enrichedEvent.sourceEventId || null
+  ];
+
+  await client.execute(query, params, { prepare: true });
+}
+
+async function getIncidentsBySeverity(severityBucket, dayBucket, limit) {
+  const query = `
+    SELECT severity_bucket, day_bucket, reported_at, incident_id, org_id,
+           service_name, team_id, message, source_event_id
+    FROM incidents_by_severity
+    WHERE severity_bucket = ? AND day_bucket = ?
+    LIMIT ?
+  `;
+
+  const result = await client.execute(
+    query,
+    [severityBucket, dayBucket, limit],
+    { prepare: true }
+  );
+
+  return result.rows.map((row) => ({
+    incidentId: row.incident_id,
+    orgId: row.org_id,
+    serviceName: row.service_name,
+    teamId: row.team_id,
+    severity: row.severity_bucket,
+    severityBucket: row.severity_bucket,
+    message: row.message,
+    reportedAt: row.reported_at.toISOString()
+  }));
+}
+
 async function markMessageProcessed(consumerGroup, messageId) {
   const query = `
     INSERT INTO processed_messages (
@@ -356,5 +466,9 @@ module.exports = {
   getIncidentLatestSnapshot,
   upsertRunbookEmbedding,
   findSimilarRunbooksByVector,
+  insertIncidentByTeam,
+  getIncidentsByTeam,
+  insertIncidentBySeverity,
+  getIncidentsBySeverity,
   markMessageProcessed
 };

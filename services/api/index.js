@@ -10,7 +10,9 @@ const {
   connectCassandra,
   getIncidentTimeline,
   getServiceHealthByOrg,
-  getArtifactsByIncident
+  getArtifactsByIncident,
+  getIncidentsByTeam,
+  getIncidentsBySeverity
 } = require("./cassandra");
 const {
   ensureBucketExists,
@@ -122,6 +124,17 @@ const typeDefs = `#graphql
     notes: String!
   }
 
+  type EnrichedIncident {
+    incidentId: ID!
+    orgId: ID
+    serviceName: String
+    teamId: String
+    severity: String
+    severityBucket: String
+    message: String!
+    reportedAt: String!
+  }
+
   input CreateIncidentInput {
     incidentId: ID!
     orgId: ID!
@@ -150,6 +163,8 @@ const typeDefs = `#graphql
       k: Int = 3
     ): [SimilarIncidentMatch!]!
     recommendedActions(incidentId: ID!, k: Int = 3): RecommendedActions!
+    incidentsByTeam(teamId: String!, limit: Int = 50): [EnrichedIncident!]!
+    incidentsBySeverity(severityBucket: String!, day: String!, limit: Int = 50): [EnrichedIncident!]!
   }
 
   type Mutation {
@@ -213,6 +228,12 @@ const resolvers = {
         actions: out.actions,
         notes: out.notes
       };
+    },
+    incidentsByTeam: async (_, { teamId, limit }) => {
+      return await getIncidentsByTeam(teamId, limit);
+    },
+    incidentsBySeverity: async (_, { severityBucket, day, limit }) => {
+      return await getIncidentsBySeverity(severityBucket, day, limit);
     }
   },
   Mutation: {

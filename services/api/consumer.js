@@ -7,6 +7,8 @@ const {
   upsertServiceHealth,
   insertArtifactMetadata,
   upsertIncidentEmbedding,
+  insertIncidentByTeam,
+  insertIncidentBySeverity,
   markMessageProcessed
 } = require("./cassandra");
 const { publishToDlq } = require("./kafka");
@@ -53,6 +55,10 @@ async function processIncidentEvent(event) {
       return;
     case "ARTIFACT_ATTACHED":
       await insertArtifactMetadata(event);
+      return;
+    case "INCIDENT_ENRICHED":
+      await insertIncidentByTeam(event);
+      await insertIncidentBySeverity(event);
       return;
     default:
       console.log(
@@ -142,6 +148,11 @@ async function startConsumer() {
 
   await consumer.subscribe({
     topic: "incident-events",
+    fromBeginning: true
+  });
+
+  await consumer.subscribe({
+    topic: "incident-enriched",
     fromBeginning: true
   });
 
