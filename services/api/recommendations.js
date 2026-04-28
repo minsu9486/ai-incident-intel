@@ -1,4 +1,5 @@
 const { GoogleGenAI } = require("@google/genai");
+const config = require("./config");
 const { getIncidentLatestSnapshot } = require("./cassandra");
 const { findSimilarIncidents, findSimilarRunbooks } = require("./retrieval");
 const {
@@ -6,19 +7,16 @@ const {
   buildRecommendedActionsPrompt
 } = require("./prompts/recommended-actions");
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
-
 let client;
 
 function getClient() {
   if (client) return client;
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  if (!config.gemini.apiKey) {
     throw new Error("GEMINI_API_KEY is not set");
   }
 
-  client = new GoogleGenAI({ apiKey });
+  client = new GoogleGenAI({ apiKey: config.gemini.apiKey });
   return client;
 }
 
@@ -47,7 +45,7 @@ async function generateRecommendedActions({ incidentId, k }) {
   });
 
   const response = await getClient().models.generateContent({
-    model: process.env.GEMINI_MODEL || DEFAULT_MODEL,
+    model: config.gemini.model,
     contents: prompt,
     config: {
       responseMimeType: "application/json",

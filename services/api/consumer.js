@@ -1,5 +1,5 @@
-require("dotenv").config();
-
+const config = require("./config");
+const baseLogger = require("./logger");
 const { Kafka } = require("kafkajs");
 const {
   connectCassandra,
@@ -16,13 +16,28 @@ const {
   buildIncidentEmbeddingText,
   embedDocument
 } = require("./embeddings");
+const {
+  recordConsumed,
+  recordRetry,
+  recordDlq,
+  startProcessingTimer,
+  observeEndToEndLag,
+  startMetricsServer,
+  startKafkaLagPoller,
+  attachKafkajsConsumerEventMetrics
+} = require("./metrics");
 
-const kafka = new Kafka({
-  clientId: "ai-incident-consumer",
-  brokers: ["localhost:9092"]
+const CONSUMER_GROUP = config.kafka.consumerGroups.projection;
+
+const logger = baseLogger.child({
+  service: "projection-consumer",
+  consumerGroup: CONSUMER_GROUP
 });
 
-const CONSUMER_GROUP = "incident-events-projection-group";
+const kafka = new Kafka({
+  clientId: config.kafka.clientIds.projectionConsumer,
+  brokers: [...config.kafka.brokers]
+});
 
 const consumer = kafka.consumer({
   groupId: CONSUMER_GROUP
@@ -35,7 +50,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function processIncidentEvent(event) {
+async function processIncidentEvent(event, log) {
   if (event.message.includes("FORCE_DLQ")) {
     throw new Error("Forced failure for DLQ test");
   }
@@ -43,7 +58,7 @@ async function processIncidentEvent(event) {
   const wasMarked = await markMessageProcessed(CONSUMER_GROUP, event.id);
 
   if (!wasMarked) {
-    console.log(`Skipping duplicate event ${event.id}`);
+    log.info("skipping duplicate event");
     return;
   }
 
@@ -51,7 +66,7 @@ async function processIncidentEvent(event) {
     case "INCIDENT_REPORTED":
       await insertIncidentEvent(event);
       await upsertServiceHealth(event);
-      await tryIndexIncidentEmbedding(event);
+      await tryIndexIncidentEmbedding(event, log);
       return;
     case "ARTIFACT_ATTACHED":
       await insertArtifactMetadata(event);
@@ -61,13 +76,11 @@ async function processIncidentEvent(event) {
       await insertIncidentBySeverity(event);
       return;
     default:
-      console.log(
-        `Ignoring unknown event ${event.id} (type=${event.type})`
-      );
+      log.warn({ eventType: event.type }, "ignoring unknown event type");
   }
 }
 
-async function tryIndexIncidentEmbedding(event) {
+async function tryIndexIncidentEmbedding(event, log) {
   const startedAt = Date.now();
   try {
     const embeddingText = buildIncidentEmbeddingText({
@@ -87,94 +100,114 @@ async function tryIndexIncidentEmbedding(event) {
       embeddingText,
       embedding
     });
-    console.log(
-      `Indexed embedding for incidentId=${event.incidentId} in ${Date.now() - startedAt}ms`
-    );
+    log.info({ durationMs: Date.now() - startedAt }, "indexed incident embedding");
   } catch (error) {
-    console.error(
-      `Embedding step skipped for incidentId=${event.incidentId}:`,
-      error.message
+    log.warn(
+      { err: error.message },
+      "embedding step skipped (best-effort, projection still landed)"
     );
   }
 }
 
-async function processWithRetry(event, kafkaMetadata) {
+async function processWithRetry(event, kafkaMetadata, log) {
   let lastError;
+  const endTimer = startProcessingTimer(CONSUMER_GROUP);
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
-    try {
-      await processIncidentEvent(event);
+  try {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+      try {
+        await processIncidentEvent(event, log);
+        log.info({ attempt }, "processed event");
+        observeEndToEndLag(CONSUMER_GROUP, event.timestamp);
+        return;
+      } catch (error) {
+        lastError = error;
+        recordRetry(CONSUMER_GROUP);
+        log.error(
+          { attempt, maxRetries: MAX_RETRIES, err: error.message },
+          "process attempt failed"
+        );
 
-      console.log(
-        `Processed event ${event.id} on attempt ${attempt}`
-      );
-
-      return;
-    } catch (error) {
-      lastError = error;
-
-      console.error(
-        `Attempt ${attempt}/${MAX_RETRIES} failed for incidentId=${event.incidentId}:`,
-        error.message
-      );
-
-      if (attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAY_MS * attempt);
+        if (attempt < MAX_RETRIES) {
+          await sleep(RETRY_DELAY_MS * attempt);
+        }
       }
     }
+
+    const dlqPayload = {
+      incidentId: event.incidentId,
+      failedAt: new Date().toISOString(),
+      retryCount: MAX_RETRIES,
+      errorMessage: lastError.message,
+      originalTopic: kafkaMetadata.topic,
+      originalPartition: kafkaMetadata.partition,
+      originalOffset: kafkaMetadata.offset,
+      originalMessage: event
+    };
+
+    await publishToDlq(dlqPayload);
+    recordDlq(CONSUMER_GROUP, "retry-exhausted");
+
+    log.error(
+      { retryCount: MAX_RETRIES },
+      "moved event to DLQ after retry exhaustion"
+    );
+  } finally {
+    endTimer();
   }
-
-  const dlqPayload = {
-    incidentId: event.incidentId,
-    failedAt: new Date().toISOString(),
-    retryCount: MAX_RETRIES,
-    errorMessage: lastError.message,
-    originalTopic: kafkaMetadata.topic,
-    originalPartition: kafkaMetadata.partition,
-    originalOffset: kafkaMetadata.offset,
-    originalMessage: event
-  };
-
-  await publishToDlq(dlqPayload);
-
-  console.error(
-    `Moved event ${event.id} to DLQ after ${MAX_RETRIES} attempts`
-  );
 }
 
 async function startConsumer() {
   await connectCassandra();
   await consumer.connect();
 
+  attachKafkajsConsumerEventMetrics(consumer, CONSUMER_GROUP);
+
   await consumer.subscribe({
-    topic: "incident-events",
+    topic: config.kafka.topics.events,
     fromBeginning: true
   });
 
   await consumer.subscribe({
-    topic: "incident-enriched",
+    topic: config.kafka.topics.enriched,
     fromBeginning: true
   });
 
-  console.log("Kafka consumer is running...");
+  startMetricsServer({
+    port: config.metrics.projectionPort,
+    name: "projection-consumer"
+  });
+
+  const admin = kafka.admin();
+  await admin.connect();
+  startKafkaLagPoller({
+    admin,
+    topics: [config.kafka.topics.events, config.kafka.topics.enriched],
+    consumerGroup: CONSUMER_GROUP
+  });
+
+  logger.info("kafka consumer is running");
 
   await consumer.run({
     eachMessage: async ({ topic, partition, message }) => {
+      const messageMeta = { topic, partition, offset: message.offset };
+      recordConsumed(topic, CONSUMER_GROUP);
       try {
         const rawValue = message.value.toString();
         const event = JSON.parse(rawValue);
 
-        console.log(
-          `Received message ${topic}[${partition}] offset=${message.offset} eventId=${event.id}`
-        );
-
-        await processWithRetry(event, {
-          topic,
-          partition,
-          offset: message.offset
+        const log = logger.child({
+          incidentId: event.incidentId,
+          eventId: event.id,
+          ...messageMeta
         });
+
+        log.debug("received message");
+
+        await processWithRetry(event, messageMeta, log);
       } catch (error) {
-        console.error("Failed to process Kafka message:", error);
+        const log = logger.child({ ...messageMeta, incidentId: "unknown" });
+        log.error({ err: error.message }, "failed to parse kafka message");
 
         const fallbackDlqPayload = {
           incidentId: "unknown",
@@ -189,11 +222,10 @@ async function startConsumer() {
 
         try {
           await publishToDlq(fallbackDlqPayload);
-          console.error(
-            `Moved malformed message at offset ${message.offset} to DLQ`
-          );
+          recordDlq(CONSUMER_GROUP, "malformed-json");
+          log.error("moved malformed message to DLQ");
         } catch (dlqError) {
-          console.error("Failed to publish malformed message to DLQ:", dlqError);
+          log.fatal({ err: dlqError.message }, "failed to publish malformed message to DLQ");
           throw dlqError;
         }
       }
@@ -201,6 +233,17 @@ async function startConsumer() {
   });
 }
 
-startConsumer().catch((error) => {
-  console.error("Consumer failed to start:", error);
-});
+if (require.main === module) {
+  startConsumer().catch((error) => {
+    logger.fatal({ err: error.message, stack: error.stack }, "consumer failed to start");
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  CONSUMER_GROUP,
+  MAX_RETRIES,
+  RETRY_DELAY_MS,
+  processIncidentEvent,
+  processWithRetry
+};

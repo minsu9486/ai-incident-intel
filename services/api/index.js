@@ -1,10 +1,13 @@
-require("dotenv").config();
+const config = require("./config");
+const baseLogger = require("./logger");
 
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
+const pinoHttp = require("pino-http");
 const { ApolloServer } = require("@apollo/server");
 const { expressMiddleware } = require("@as-integrations/express4");
+const { register: metricsRegister } = require("./metrics");
 const { publishIncidentReported, publishArtifactAttached } = require("./kafka");
 const {
   connectCassandra,
@@ -23,7 +26,9 @@ const { generateIncidentSummary } = require("./gemini");
 const { findSimilarIncidents } = require("./retrieval");
 const { generateRecommendedActions } = require("./recommendations");
 
-const PORT = 4000;
+const logger = baseLogger.child({ service: "api" });
+
+const PORT = config.api.port;
 
 const crypto = require("crypto");
 
@@ -256,6 +261,19 @@ async function startServer() {
 
   const app = express();
 
+  app.use(
+    pinoHttp({
+      logger,
+      autoLogging: {
+        ignore: (req) => req.url === "/metrics" || req.url === "/health"
+      },
+      customLogLevel: (_req, res, err) => {
+        if (err || res.statusCode >= 500) return "error";
+        if (res.statusCode >= 400) return "warn";
+        return "info";
+      }
+    })
+  );
   app.use(cors());
   app.use(express.json());
 
@@ -265,6 +283,15 @@ async function startServer() {
       service: "ai-incident-api",
       timestamp: new Date().toISOString()
     });
+  });
+
+  app.get("/metrics", async (_req, res) => {
+    try {
+      res.setHeader("Content-Type", metricsRegister.contentType);
+      res.end(await metricsRegister.metrics());
+    } catch (error) {
+      res.status(500).send(error.message);
+    }
   });
 
   app.post("/incidents", async (req, res) => {
@@ -293,7 +320,7 @@ async function startServer() {
         event: newEvent
       });
     } catch (error) {
-      console.error("Failed to create incident:", error);
+      req.log.error({ err: error.message }, "failed to create incident");
 
       return res.status(500).json({
         ok: false,
@@ -348,7 +375,7 @@ async function startServer() {
         event
       });
     } catch (error) {
-      console.error("Artifact upload failed:", error);
+      req.log.error({ err: error.message }, "artifact upload failed");
 
       return res.status(500).json({
         ok: false,
@@ -372,7 +399,7 @@ async function startServer() {
 
       return res.json({ ok: true, incidentId, ...summary });
     } catch (error) {
-      console.error("AI incident summary failed:", error);
+      req.log.error({ err: error.message }, "AI incident summary failed");
 
       const status = error.code === "NOT_FOUND" ? 404 : 500;
       return res.status(status).json({
@@ -411,7 +438,7 @@ async function startServer() {
 
       return res.json({ ok: true, matches });
     } catch (error) {
-      console.error("Similar incident lookup failed:", error);
+      req.log.error({ err: error.message }, "similar incident lookup failed");
 
       return res.status(500).json({
         ok: false,
@@ -452,7 +479,7 @@ async function startServer() {
         }
       });
     } catch (error) {
-      console.error("Recommended actions generation failed:", error);
+      req.log.error({ err: error.message }, "recommended actions generation failed");
 
       const status = error.code === "NOT_FOUND" ? 404 : 500;
       return res.status(status).json({
@@ -476,7 +503,7 @@ async function startServer() {
         expiresInSeconds: 900
       });
     } catch (error) {
-      console.error("Failed to generate download URL:", error);
+      req.log.error({ err: error.message }, "failed to generate download URL");
 
       return res.status(500).json({
         ok: false,
@@ -495,17 +522,11 @@ async function startServer() {
   app.use("/graphql", expressMiddleware(server));
 
   app.listen(PORT, () => {
-    console.log(`REST health: http://localhost:${PORT}/health`);
-    console.log(`REST create incident: POST http://localhost:${PORT}/incidents`);
-    console.log(`REST upload artifact: POST http://localhost:${PORT}/artifacts/upload`);
-    console.log(`REST signed URL: GET http://localhost:${PORT}/artifacts/<objectKey>/download-url`);
-    console.log(`REST AI summary: POST http://localhost:${PORT}/ai/incident-summary`);
-    console.log(`REST AI similar incidents: POST http://localhost:${PORT}/ai/similar-incidents`);
-    console.log(`REST AI recommended actions: POST http://localhost:${PORT}/ai/recommended-actions`);
-    console.log(`GraphQL endpoint: http://localhost:${PORT}/graphql`);
+    logger.info({ port: PORT }, "api listening");
   });
 }
 
 startServer().catch((err) => {
-  console.error("Server failed to start:", err);
+  logger.fatal({ err: err.message, stack: err.stack }, "server failed to start");
+  process.exit(1);
 });

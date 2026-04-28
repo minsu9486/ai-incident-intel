@@ -1,13 +1,17 @@
 const Minio = require("minio");
+const config = require("./config");
+const baseLogger = require("./logger");
 
-const BUCKET_NAME = "incident-artifacts";
+const logger = baseLogger.child({ module: "minio" });
+
+const BUCKET_NAME = config.minio.bucket;
 
 const minioClient = new Minio.Client({
-  endPoint: "localhost",
-  port: 9000,
-  useSSL: false,
-  accessKey: "minioadmin",
-  secretKey: "minioadmin"
+  endPoint: config.minio.endpoint,
+  port: config.minio.port,
+  useSSL: config.minio.useSSL,
+  accessKey: config.minio.accessKey,
+  secretKey: config.minio.secretKey
 });
 
 async function ensureBucketExists() {
@@ -15,7 +19,7 @@ async function ensureBucketExists() {
 
   if (!exists) {
     await minioClient.makeBucket(BUCKET_NAME, "us-east-1");
-    console.log(`Created bucket: ${BUCKET_NAME}`);
+    logger.info({ bucket: BUCKET_NAME }, "created bucket");
   }
 }
 

@@ -1,6 +1,6 @@
 const { GoogleGenAI } = require("@google/genai");
+const config = require("./config");
 
-const DEFAULT_EMBEDDING_MODEL = "gemini-embedding-001";
 const EMBEDDING_DIM = 768;
 
 let client;
@@ -8,12 +8,11 @@ let client;
 function getClient() {
   if (client) return client;
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  if (!config.gemini.apiKey) {
     throw new Error("GEMINI_API_KEY is not set");
   }
 
-  client = new GoogleGenAI({ apiKey });
+  client = new GoogleGenAI({ apiKey: config.gemini.apiKey });
   return client;
 }
 
@@ -29,7 +28,7 @@ function buildIncidentEmbeddingText(incident) {
 
 async function embed(text, taskType) {
   const response = await getClient().models.embedContent({
-    model: process.env.GEMINI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL,
+    model: config.gemini.embeddingModel,
     contents: text,
     config: {
       taskType,

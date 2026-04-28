@@ -1,9 +1,13 @@
+const config = require("./config");
+const baseLogger = require("./logger");
 const { Kafka } = require("kafkajs");
 const { sendJsonMessage } = require("./kafka");
 
+const logger = baseLogger.child({ service: "replay-dlq" });
+
 const kafka = new Kafka({
-  clientId: "ai-incident-dlq-replay",
-  brokers: ["localhost:9092"]
+  clientId: config.kafka.clientIds.replayDlq,
+  brokers: [...config.kafka.brokers]
 });
 
 const consumer = kafka.consumer({
@@ -25,31 +29,30 @@ async function ensureTopicExists(topic) {
 }
 
 async function replayDlqMessages() {
-  await ensureTopicExists("incident-events-dlq");
+  await ensureTopicExists(config.kafka.topics.dlq);
 
   await consumer.connect();
 
   await consumer.subscribe({
-    topic: "incident-events-dlq",
+    topic: config.kafka.topics.dlq,
     fromBeginning: true
   });
 
-  console.log("Reading DLQ messages for replay...");
+  logger.info("reading DLQ messages for replay");
 
   await consumer.run({
     eachMessage: async ({ topic, partition, message }) => {
       const rawValue = message.value.toString();
       const dlqPayload = JSON.parse(rawValue);
+      const log = logger.child({ topic, partition, offset: message.offset });
 
       if (!dlqPayload.originalMessage) {
-        console.log(
-          `Skipping DLQ message at ${topic}[${partition}] offset=${message.offset} because it has no originalMessage`
-        );
+        log.warn("skipping DLQ message — no originalMessage");
         return;
       }
 
       await sendJsonMessage(
-        "incident-events",
+        config.kafka.topics.events,
         dlqPayload.originalMessage.incidentId,
         dlqPayload.originalMessage,
         {
@@ -57,13 +60,15 @@ async function replayDlqMessages() {
         }
       );
 
-      console.log(
-        `Replayed incidentId=${dlqPayload.originalMessage.incidentId} from DLQ offset=${message.offset}`
+      log.info(
+        { incidentId: dlqPayload.originalMessage.incidentId },
+        "replayed message from DLQ"
       );
     }
   });
 }
 
 replayDlqMessages().catch((error) => {
-  console.error("DLQ replay failed:", error);
+  logger.fatal({ err: error.message, stack: error.stack }, "DLQ replay failed");
+  process.exit(1);
 });

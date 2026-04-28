@@ -1,5 +1,5 @@
-require("dotenv").config();
-
+const config = require("./config");
+const baseLogger = require("./logger");
 const crypto = require("crypto");
 const { Kafka } = require("kafkajs");
 const { GoogleGenAI } = require("@google/genai");
@@ -9,13 +9,28 @@ const {
 } = require("./cassandra");
 const { publishIncidentEnriched, publishToDlq } = require("./kafka");
 const { lookupTeamId } = require("./teams");
+const {
+  recordConsumed,
+  recordRetry,
+  recordDlq,
+  startProcessingTimer,
+  observeEndToEndLag,
+  startMetricsServer,
+  startKafkaLagPoller,
+  attachKafkajsConsumerEventMetrics
+} = require("./metrics");
 
-const kafka = new Kafka({
-  clientId: "ai-incident-enrichment-consumer",
-  brokers: ["localhost:9092"]
+const CONSUMER_GROUP = config.kafka.consumerGroups.enrichment;
+
+const logger = baseLogger.child({
+  service: "enrichment-consumer",
+  consumerGroup: CONSUMER_GROUP
 });
 
-const CONSUMER_GROUP = "incident-enrichment-group";
+const kafka = new Kafka({
+  clientId: config.kafka.clientIds.enrichmentConsumer,
+  brokers: [...config.kafka.brokers]
+});
 
 const consumer = kafka.consumer({
   groupId: CONSUMER_GROUP
@@ -27,15 +42,12 @@ const RETRY_DELAY_MS = 1000;
 const SEVERITY_BUCKETS = new Set(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
 const DEFAULT_SEVERITY_BUCKET = "MEDIUM";
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-
 let geminiClient;
 
 function getGeminiClient() {
   if (geminiClient) return geminiClient;
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-  geminiClient = new GoogleGenAI({ apiKey });
+  if (!config.gemini.apiKey) return null;
+  geminiClient = new GoogleGenAI({ apiKey: config.gemini.apiKey });
   return geminiClient;
 }
 
@@ -54,7 +66,7 @@ function computeDayBucket(isoTimestamp) {
   return d.toISOString().slice(0, 10);
 }
 
-async function tryGenerateSeverityHint({ serviceName, severity, message }) {
+async function tryGenerateSeverityHint({ serviceName, severity, message }, log) {
   const client = getGeminiClient();
   if (!client) return null;
 
@@ -71,7 +83,7 @@ async function tryGenerateSeverityHint({ serviceName, severity, message }) {
     ].join("\n");
 
     const response = await client.models.generateContent({
-      model: process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+      model: config.gemini.model,
       contents: prompt,
       config: { temperature: 0 }
     });
@@ -80,15 +92,13 @@ async function tryGenerateSeverityHint({ serviceName, severity, message }) {
     const match = text.match(/\b(LOW|MEDIUM|HIGH|CRITICAL)\b/);
     const hint = match ? match[1] : null;
 
-    console.log(
-      `Severity hint for ${serviceName || "?"}: ${hint || "unparseable"} (${Date.now() - startedAt}ms)`
+    log.info(
+      { serviceName, hint: hint || "unparseable", durationMs: Date.now() - startedAt },
+      "severity hint generated"
     );
     return hint;
   } catch (error) {
-    console.error(
-      `Severity hint skipped for service=${serviceName}:`,
-      error.message
-    );
+    log.warn({ serviceName, err: error.message }, "severity hint skipped");
     return null;
   }
 }
@@ -112,7 +122,7 @@ function buildEnrichedEvent({ source, teamId, severityBucket, aiSeverityHint }) 
   };
 }
 
-async function enrichIncidentEvent(event) {
+async function enrichIncidentEvent(event, log) {
   if (event.type !== "INCIDENT_REPORTED") {
     return;
   }
@@ -123,17 +133,20 @@ async function enrichIncidentEvent(event) {
 
   const wasMarked = await markMessageProcessed(CONSUMER_GROUP, event.id);
   if (!wasMarked) {
-    console.log(`Skipping duplicate event ${event.id} in enrichment group`);
+    log.info("skipping duplicate event in enrichment group");
     return;
   }
 
   const teamId = lookupTeamId(event.serviceName);
   const severityBucket = normalizeSeverityBucket(event.severity);
-  const aiSeverityHint = await tryGenerateSeverityHint({
-    serviceName: event.serviceName,
-    severity: event.severity,
-    message: event.message
-  });
+  const aiSeverityHint = await tryGenerateSeverityHint(
+    {
+      serviceName: event.serviceName,
+      severity: event.severity,
+      message: event.message
+    },
+    log
+  );
 
   const enriched = buildEnrichedEvent({
     source: event,
@@ -144,84 +157,108 @@ async function enrichIncidentEvent(event) {
 
   await publishIncidentEnriched(enriched);
 
-  console.log(
-    `Enriched incidentId=${event.incidentId} team=${teamId} bucket=${severityBucket} hint=${aiSeverityHint || "none"}`
+  log.info(
+    { teamId, severityBucket, aiSeverityHint: aiSeverityHint || null },
+    "enriched incident"
   );
 }
 
-async function processWithRetry(event, kafkaMetadata) {
+async function processWithRetry(event, kafkaMetadata, log) {
   let lastError;
+  const endTimer = startProcessingTimer(CONSUMER_GROUP);
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
-    try {
-      await enrichIncidentEvent(event);
+  try {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+      try {
+        await enrichIncidentEvent(event, log);
+        log.info({ attempt }, "enrichment processed event");
+        observeEndToEndLag(CONSUMER_GROUP, event.timestamp);
+        return;
+      } catch (error) {
+        lastError = error;
+        recordRetry(CONSUMER_GROUP);
+        log.error(
+          { attempt, maxRetries: MAX_RETRIES, err: error.message },
+          "enrichment attempt failed"
+        );
 
-      console.log(
-        `Enrichment processed event ${event.id} on attempt ${attempt}`
-      );
-
-      return;
-    } catch (error) {
-      lastError = error;
-
-      console.error(
-        `Enrichment attempt ${attempt}/${MAX_RETRIES} failed for incidentId=${event.incidentId}:`,
-        error.message
-      );
-
-      if (attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAY_MS * attempt);
+        if (attempt < MAX_RETRIES) {
+          await sleep(RETRY_DELAY_MS * attempt);
+        }
       }
     }
+
+    const dlqPayload = {
+      incidentId: event.incidentId,
+      failedAt: new Date().toISOString(),
+      retryCount: MAX_RETRIES,
+      errorMessage: lastError.message,
+      failedConsumerGroup: CONSUMER_GROUP,
+      originalTopic: kafkaMetadata.topic,
+      originalPartition: kafkaMetadata.partition,
+      originalOffset: kafkaMetadata.offset,
+      originalMessage: event
+    };
+
+    await publishToDlq(dlqPayload);
+    recordDlq(CONSUMER_GROUP, "retry-exhausted");
+
+    log.error(
+      { retryCount: MAX_RETRIES },
+      "enrichment moved event to DLQ after retry exhaustion"
+    );
+  } finally {
+    endTimer();
   }
-
-  const dlqPayload = {
-    incidentId: event.incidentId,
-    failedAt: new Date().toISOString(),
-    retryCount: MAX_RETRIES,
-    errorMessage: lastError.message,
-    failedConsumerGroup: CONSUMER_GROUP,
-    originalTopic: kafkaMetadata.topic,
-    originalPartition: kafkaMetadata.partition,
-    originalOffset: kafkaMetadata.offset,
-    originalMessage: event
-  };
-
-  await publishToDlq(dlqPayload);
-
-  console.error(
-    `Enrichment moved event ${event.id} to DLQ after ${MAX_RETRIES} attempts`
-  );
 }
 
 async function startConsumer() {
   await connectCassandra();
   await consumer.connect();
 
+  attachKafkajsConsumerEventMetrics(consumer, CONSUMER_GROUP);
+
   await consumer.subscribe({
-    topic: "incident-events",
+    topic: config.kafka.topics.events,
     fromBeginning: true
   });
 
-  console.log("Kafka enrichment consumer is running...");
+  startMetricsServer({
+    port: config.metrics.enrichmentPort,
+    name: "enrichment-consumer"
+  });
+
+  const admin = kafka.admin();
+  await admin.connect();
+  startKafkaLagPoller({
+    admin,
+    topics: [config.kafka.topics.events],
+    consumerGroup: CONSUMER_GROUP
+  });
+
+  logger.info("kafka enrichment consumer is running");
 
   await consumer.run({
     eachMessage: async ({ topic, partition, message }) => {
+      const messageMeta = { topic, partition, offset: message.offset };
+      recordConsumed(topic, CONSUMER_GROUP);
       try {
         const rawValue = message.value.toString();
         const event = JSON.parse(rawValue);
 
-        console.log(
-          `Enrichment received message ${topic}[${partition}] offset=${message.offset} eventId=${event.id} type=${event.type}`
-        );
-
-        await processWithRetry(event, {
-          topic,
-          partition,
-          offset: message.offset
+        const log = logger.child({
+          incidentId: event.incidentId,
+          eventId: event.id,
+          eventType: event.type,
+          ...messageMeta
         });
+
+        log.debug("enrichment received message");
+
+        await processWithRetry(event, messageMeta, log);
       } catch (error) {
-        console.error("Enrichment failed to process Kafka message:", error);
+        const log = logger.child({ ...messageMeta, incidentId: "unknown" });
+        log.error({ err: error.message }, "enrichment failed to parse kafka message");
 
         const fallbackDlqPayload = {
           incidentId: "unknown",
@@ -237,11 +274,10 @@ async function startConsumer() {
 
         try {
           await publishToDlq(fallbackDlqPayload);
-          console.error(
-            `Enrichment moved malformed message at offset ${message.offset} to DLQ`
-          );
+          recordDlq(CONSUMER_GROUP, "malformed-json");
+          log.error("enrichment moved malformed message to DLQ");
         } catch (dlqError) {
-          console.error("Enrichment failed to publish malformed message to DLQ:", dlqError);
+          log.fatal({ err: dlqError.message }, "enrichment failed to publish malformed message to DLQ");
           throw dlqError;
         }
       }
@@ -250,5 +286,6 @@ async function startConsumer() {
 }
 
 startConsumer().catch((error) => {
-  console.error("Enrichment consumer failed to start:", error);
+  logger.fatal({ err: error.message, stack: error.stack }, "enrichment consumer failed to start");
+  process.exit(1);
 });

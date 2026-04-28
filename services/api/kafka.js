@@ -1,8 +1,10 @@
 const { Kafka } = require("kafkajs");
+const config = require("./config");
+const { recordPublished } = require("./metrics");
 
 const kafka = new Kafka({
-  clientId: "ai-incident-api",
-  brokers: ["localhost:9092"]
+  clientId: config.kafka.clientIds.api,
+  brokers: [...config.kafka.brokers]
 });
 
 const producer = kafka.producer();
@@ -51,23 +53,25 @@ async function sendJsonMessage(topic, key, payload, headers = {}) {
       }
     ]
   });
+
+  recordPublished(topic);
 }
 
 async function publishIncidentReported(event) {
-  await sendJsonMessage("incident-events", event.incidentId, event);
+  await sendJsonMessage(config.kafka.topics.events, event.incidentId, event);
 }
 
 async function publishArtifactAttached(event) {
-  await sendJsonMessage("incident-events", event.incidentId, event);
+  await sendJsonMessage(config.kafka.topics.events, event.incidentId, event);
 }
 
 async function publishIncidentEnriched(event) {
-  await sendJsonMessage("incident-enriched", event.incidentId, event);
+  await sendJsonMessage(config.kafka.topics.enriched, event.incidentId, event);
 }
 
 async function publishToDlq(dlqPayload) {
   await sendJsonMessage(
-    "incident-events-dlq",
+    config.kafka.topics.dlq,
     dlqPayload.incidentId || "unknown",
     dlqPayload
   );

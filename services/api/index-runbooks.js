@@ -1,4 +1,4 @@
-require("dotenv").config();
+const config = require("./config");
 
 const fs = require("fs/promises");
 const path = require("path");
@@ -69,7 +69,7 @@ async function loadRunbookFile(file) {
 }
 
 async function main() {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!config.gemini.apiKey) {
     console.error("GEMINI_API_KEY is not set. Add it to services/api/.env.");
     process.exit(1);
   }

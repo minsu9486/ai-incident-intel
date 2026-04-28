@@ -1,9 +1,13 @@
 const cassandra = require("cassandra-driver");
+const config = require("./config");
+const baseLogger = require("./logger");
+
+const logger = baseLogger.child({ module: "cassandra" });
 
 const client = new cassandra.Client({
-  contactPoints: ["127.0.0.1"],
-  localDataCenter: "dc1",
-  keyspace: "ai_incident_intel"
+  contactPoints: [...config.cassandra.contactPoints],
+  localDataCenter: config.cassandra.localDataCenter,
+  keyspace: config.cassandra.keyspace
 });
 
 function toVector(values) {
@@ -16,7 +20,13 @@ async function connectCassandra() {
   if (!connected) {
     await client.connect();
     connected = true;
-    console.log("Connected to Cassandra");
+    logger.info(
+      {
+        contactPoints: config.cassandra.contactPoints,
+        keyspace: config.cassandra.keyspace
+      },
+      "connected to cassandra"
+    );
   }
 }
 
